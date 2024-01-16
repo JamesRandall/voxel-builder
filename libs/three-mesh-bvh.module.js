@@ -164,6 +164,183 @@ function hasGroupGaps( geometry ) {
 
 }
 
+// computes the union of the bounds of all of the given triangles and puts the resulting box in "target".
+// A bounding box is computed for the centroids of the triangles, as well, and placed in "centroidTarget".
+// These are computed together to avoid redundant accesses to bounds array.
+function getBounds( triangleBounds, offset, count, target, centroidTarget ) {
+
+	let minx = Infinity;
+	let miny = Infinity;
+	let minz = Infinity;
+	let maxx = - Infinity;
+	let maxy = - Infinity;
+	let maxz = - Infinity;
+
+	let cminx = Infinity;
+	let cminy = Infinity;
+	let cminz = Infinity;
+	let cmaxx = - Infinity;
+	let cmaxy = - Infinity;
+	let cmaxz = - Infinity;
+
+	for ( let i = offset * 6, end = ( offset + count ) * 6; i < end; i += 6 ) {
+
+		const cx = triangleBounds[ i + 0 ];
+		const hx = triangleBounds[ i + 1 ];
+		const lx = cx - hx;
+		const rx = cx + hx;
+		if ( lx < minx ) minx = lx;
+		if ( rx > maxx ) maxx = rx;
+		if ( cx < cminx ) cminx = cx;
+		if ( cx > cmaxx ) cmaxx = cx;
+
+		const cy = triangleBounds[ i + 2 ];
+		const hy = triangleBounds[ i + 3 ];
+		const ly = cy - hy;
+		const ry = cy + hy;
+		if ( ly < miny ) miny = ly;
+		if ( ry > maxy ) maxy = ry;
+		if ( cy < cminy ) cminy = cy;
+		if ( cy > cmaxy ) cmaxy = cy;
+
+		const cz = triangleBounds[ i + 4 ];
+		const hz = triangleBounds[ i + 5 ];
+		const lz = cz - hz;
+		const rz = cz + hz;
+		if ( lz < minz ) minz = lz;
+		if ( rz > maxz ) maxz = rz;
+		if ( cz < cminz ) cminz = cz;
+		if ( cz > cmaxz ) cmaxz = cz;
+
+	}
+
+	target[ 0 ] = minx;
+	target[ 1 ] = miny;
+	target[ 2 ] = minz;
+
+	target[ 3 ] = maxx;
+	target[ 4 ] = maxy;
+	target[ 5 ] = maxz;
+
+	centroidTarget[ 0 ] = cminx;
+	centroidTarget[ 1 ] = cminy;
+	centroidTarget[ 2 ] = cminz;
+
+	centroidTarget[ 3 ] = cmaxx;
+	centroidTarget[ 4 ] = cmaxy;
+	centroidTarget[ 5 ] = cmaxz;
+
+}
+
+// precomputes the bounding box for each triangle; required for quickly calculating tree splits.
+// result is an array of size tris.length * 6 where triangle i maps to a
+// [x_center, x_delta, y_center, y_delta, z_center, z_delta] tuple starting at index i * 6,
+// representing the center and half-extent in each dimension of triangle i
+function computeTriangleBounds( geo, target = null, offset = null, count = null ) {
+
+	const posAttr = geo.attributes.position;
+	const index = geo.index ? geo.index.array : null;
+	const triCount = getTriCount( geo );
+	const normalized = posAttr.normalized;
+	let triangleBounds;
+	if ( target === null ) {
+
+		triangleBounds = new Float32Array( triCount * 6 * 4 );
+		offset = 0;
+		count = triCount;
+
+	} else {
+
+		triangleBounds = target;
+		offset = offset || 0;
+		count = count || triCount;
+
+	}
+
+	// used for non-normalized positions
+	const posArr = posAttr.array;
+
+	// support for an interleaved position buffer
+	const bufferOffset = posAttr.offset || 0;
+	let stride = 3;
+	if ( posAttr.isInterleavedBufferAttribute ) {
+
+		stride = posAttr.data.stride;
+
+	}
+
+	// used for normalized positions
+	const getters = [ 'getX', 'getY', 'getZ' ];
+
+	for ( let tri = offset; tri < offset + count; tri ++ ) {
+
+		const tri3 = tri * 3;
+		const tri6 = tri * 6;
+
+		let ai = tri3 + 0;
+		let bi = tri3 + 1;
+		let ci = tri3 + 2;
+
+		if ( index ) {
+
+			ai = index[ ai ];
+			bi = index[ bi ];
+			ci = index[ ci ];
+
+		}
+
+		// we add the stride and offset here since we access the array directly
+		// below for the sake of performance
+		if ( ! normalized ) {
+
+			ai = ai * stride + bufferOffset;
+			bi = bi * stride + bufferOffset;
+			ci = ci * stride + bufferOffset;
+
+		}
+
+		for ( let el = 0; el < 3; el ++ ) {
+
+			let a, b, c;
+
+			if ( normalized ) {
+
+				a = posAttr[ getters[ el ] ]( ai );
+				b = posAttr[ getters[ el ] ]( bi );
+				c = posAttr[ getters[ el ] ]( ci );
+
+			} else {
+
+				a = posArr[ ai + el ];
+				b = posArr[ bi + el ];
+				c = posArr[ ci + el ];
+
+			}
+
+			let min = a;
+			if ( b < min ) min = b;
+			if ( c < min ) min = c;
+
+			let max = a;
+			if ( b > max ) max = b;
+			if ( c > max ) max = c;
+
+			// Increase the bounds size by float32 epsilon to avoid precision errors when
+			// converting to 32 bit float. Scale the epsilon by the size of the numbers being
+			// worked with.
+			const halfExtents = ( max - min ) / 2;
+			const el2 = el * 2;
+			triangleBounds[ tri6 + el2 + 0 ] = min + halfExtents;
+			triangleBounds[ tri6 + el2 + 1 ] = halfExtents + ( Math.abs( min ) + halfExtents ) * FLOAT32_EPSILON;
+
+		}
+
+	}
+
+	return triangleBounds;
+
+}
+
 function arrayToBox( nodeIndex32, array, target ) {
 
 	target.min.x = array[ nodeIndex32 ];
@@ -270,218 +447,6 @@ function computeSurfaceArea( bounds ) {
 	const d2 = bounds[ 5 ] - bounds[ 2 ];
 
 	return 2 * ( d0 * d1 + d1 * d2 + d2 * d0 );
-
-}
-
-// computes the union of the bounds of all of the given triangles and puts the resulting box in target. If
-// centroidTarget is provided then a bounding box is computed for the centroids of the triangles, as well.
-// These are computed together to avoid redundant accesses to bounds array.
-function getBounds( triangleBounds, offset, count, target, centroidTarget = null ) {
-
-	let minx = Infinity;
-	let miny = Infinity;
-	let minz = Infinity;
-	let maxx = - Infinity;
-	let maxy = - Infinity;
-	let maxz = - Infinity;
-
-	let cminx = Infinity;
-	let cminy = Infinity;
-	let cminz = Infinity;
-	let cmaxx = - Infinity;
-	let cmaxy = - Infinity;
-	let cmaxz = - Infinity;
-
-	const includeCentroid = centroidTarget !== null;
-	for ( let i = offset * 6, end = ( offset + count ) * 6; i < end; i += 6 ) {
-
-		const cx = triangleBounds[ i + 0 ];
-		const hx = triangleBounds[ i + 1 ];
-		const lx = cx - hx;
-		const rx = cx + hx;
-		if ( lx < minx ) minx = lx;
-		if ( rx > maxx ) maxx = rx;
-		if ( includeCentroid && cx < cminx ) cminx = cx;
-		if ( includeCentroid && cx > cmaxx ) cmaxx = cx;
-
-		const cy = triangleBounds[ i + 2 ];
-		const hy = triangleBounds[ i + 3 ];
-		const ly = cy - hy;
-		const ry = cy + hy;
-		if ( ly < miny ) miny = ly;
-		if ( ry > maxy ) maxy = ry;
-		if ( includeCentroid && cy < cminy ) cminy = cy;
-		if ( includeCentroid && cy > cmaxy ) cmaxy = cy;
-
-		const cz = triangleBounds[ i + 4 ];
-		const hz = triangleBounds[ i + 5 ];
-		const lz = cz - hz;
-		const rz = cz + hz;
-		if ( lz < minz ) minz = lz;
-		if ( rz > maxz ) maxz = rz;
-		if ( includeCentroid && cz < cminz ) cminz = cz;
-		if ( includeCentroid && cz > cmaxz ) cmaxz = cz;
-
-	}
-
-	target[ 0 ] = minx;
-	target[ 1 ] = miny;
-	target[ 2 ] = minz;
-
-	target[ 3 ] = maxx;
-	target[ 4 ] = maxy;
-	target[ 5 ] = maxz;
-
-	if ( includeCentroid ) {
-
-		centroidTarget[ 0 ] = cminx;
-		centroidTarget[ 1 ] = cminy;
-		centroidTarget[ 2 ] = cminz;
-
-		centroidTarget[ 3 ] = cmaxx;
-		centroidTarget[ 4 ] = cmaxy;
-		centroidTarget[ 5 ] = cmaxz;
-
-	}
-
-}
-
-// A stand alone function for retrieving the centroid bounds.
-function getCentroidBounds( triangleBounds, offset, count, centroidTarget ) {
-
-	let cminx = Infinity;
-	let cminy = Infinity;
-	let cminz = Infinity;
-	let cmaxx = - Infinity;
-	let cmaxy = - Infinity;
-	let cmaxz = - Infinity;
-
-	for ( let i = offset * 6, end = ( offset + count ) * 6; i < end; i += 6 ) {
-
-		const cx = triangleBounds[ i + 0 ];
-		if ( cx < cminx ) cminx = cx;
-		if ( cx > cmaxx ) cmaxx = cx;
-
-		const cy = triangleBounds[ i + 2 ];
-		if ( cy < cminy ) cminy = cy;
-		if ( cy > cmaxy ) cmaxy = cy;
-
-		const cz = triangleBounds[ i + 4 ];
-		if ( cz < cminz ) cminz = cz;
-		if ( cz > cmaxz ) cmaxz = cz;
-
-	}
-
-	centroidTarget[ 0 ] = cminx;
-	centroidTarget[ 1 ] = cminy;
-	centroidTarget[ 2 ] = cminz;
-
-	centroidTarget[ 3 ] = cmaxx;
-	centroidTarget[ 4 ] = cmaxy;
-	centroidTarget[ 5 ] = cmaxz;
-
-}
-
-
-// precomputes the bounding box for each triangle; required for quickly calculating tree splits.
-// result is an array of size tris.length * 6 where triangle i maps to a
-// [x_center, x_delta, y_center, y_delta, z_center, z_delta] tuple starting at index i * 6,
-// representing the center and half-extent in each dimension of triangle i
-function computeTriangleBounds( geo, fullBounds ) {
-
-	// clear the bounds to empty
-	makeEmptyBounds( fullBounds );
-
-	const posAttr = geo.attributes.position;
-	const index = geo.index ? geo.index.array : null;
-	const triCount = getTriCount( geo );
-	const triangleBounds = new Float32Array( triCount * 6 );
-	const normalized = posAttr.normalized;
-
-	// used for non-normalized positions
-	const posArr = posAttr.array;
-
-	// support for an interleaved position buffer
-	const bufferOffset = posAttr.offset || 0;
-	let stride = 3;
-	if ( posAttr.isInterleavedBufferAttribute ) {
-
-		stride = posAttr.data.stride;
-
-	}
-
-	// used for normalized positions
-	const getters = [ 'getX', 'getY', 'getZ' ];
-
-	for ( let tri = 0; tri < triCount; tri ++ ) {
-
-		const tri3 = tri * 3;
-		const tri6 = tri * 6;
-
-		let ai = tri3 + 0;
-		let bi = tri3 + 1;
-		let ci = tri3 + 2;
-
-		if ( index ) {
-
-			ai = index[ ai ];
-			bi = index[ bi ];
-			ci = index[ ci ];
-
-		}
-
-		// we add the stride and offset here since we access the array directly
-		// below for the sake of performance
-		if ( ! normalized ) {
-
-			ai = ai * stride + bufferOffset;
-			bi = bi * stride + bufferOffset;
-			ci = ci * stride + bufferOffset;
-
-		}
-
-		for ( let el = 0; el < 3; el ++ ) {
-
-			let a, b, c;
-
-			if ( normalized ) {
-
-				a = posAttr[ getters[ el ] ]( ai );
-				b = posAttr[ getters[ el ] ]( bi );
-				c = posAttr[ getters[ el ] ]( ci );
-
-			} else {
-
-				a = posArr[ ai + el ];
-				b = posArr[ bi + el ];
-				c = posArr[ ci + el ];
-
-			}
-
-			let min = a;
-			if ( b < min ) min = b;
-			if ( c < min ) min = c;
-
-			let max = a;
-			if ( b > max ) max = b;
-			if ( c > max ) max = c;
-
-			// Increase the bounds size by float32 epsilon to avoid precision errors when
-			// converting to 32 bit float. Scale the epsilon by the size of the numbers being
-			// worked with.
-			const halfExtents = ( max - min ) / 2;
-			const el2 = el * 2;
-			triangleBounds[ tri6 + el2 + 0 ] = min + halfExtents;
-			triangleBounds[ tri6 + el2 + 1 ] = halfExtents + ( Math.abs( min ) + halfExtents ) * FLOAT32_EPSILON;
-
-			if ( min < fullBounds[ el ] ) fullBounds[ el ] = min;
-			if ( max > fullBounds[ el + 3 ] ) fullBounds[ el + 3 ] = max;
-
-		}
-
-	}
-
-	return triangleBounds;
 
 }
 
@@ -797,6 +762,8 @@ class MeshBVHNode {
 		// internal nodes have boundingData, left, right, and splitAxis
 		// leaf nodes have offset and count (referring to primitives in the mesh geometry)
 
+		this.boundingData = new Float32Array( 6 );
+
 	}
 
 }
@@ -928,6 +895,149 @@ function partition_indirect( indirectBuffer, index, triangleBounds, offset, coun
 
 }
 
+function IS_LEAF( n16, uint16Array ) {
+
+	return uint16Array[ n16 + 15 ] === 0xFFFF;
+
+}
+
+function OFFSET( n32, uint32Array ) {
+
+	return uint32Array[ n32 + 6 ];
+
+}
+
+function COUNT( n16, uint16Array ) {
+
+	return uint16Array[ n16 + 14 ];
+
+}
+
+function LEFT_NODE( n32 ) {
+
+	return n32 + 8;
+
+}
+
+function RIGHT_NODE( n32, uint32Array ) {
+
+	return uint32Array[ n32 + 6 ];
+
+}
+
+function SPLIT_AXIS( n32, uint32Array ) {
+
+	return uint32Array[ n32 + 7 ];
+
+}
+
+function BOUNDING_DATA_INDEX( n32 ) {
+
+	return n32;
+
+}
+
+let float32Array, uint32Array, uint16Array, uint8Array;
+const MAX_POINTER = Math.pow( 2, 32 );
+
+function countNodes( node ) {
+
+	if ( node.count ) {
+
+		return 1;
+
+	} else {
+
+		return 1 + countNodes( node.left ) + countNodes( node.right );
+
+	}
+
+}
+
+function populateBuffer( byteOffset, node, buffer ) {
+
+	float32Array = new Float32Array( buffer );
+	uint32Array = new Uint32Array( buffer );
+	uint16Array = new Uint16Array( buffer );
+	uint8Array = new Uint8Array( buffer );
+
+	return _populateBuffer( byteOffset, node );
+
+}
+
+// pack structure
+// boundingData  				: 6 float32
+// right / offset 				: 1 uint32
+// splitAxis / isLeaf + count 	: 1 uint32 / 2 uint16
+function _populateBuffer( byteOffset, node ) {
+
+	const stride4Offset = byteOffset / 4;
+	const stride2Offset = byteOffset / 2;
+	const isLeaf = ! ! node.count;
+	const boundingData = node.boundingData;
+	for ( let i = 0; i < 6; i ++ ) {
+
+		float32Array[ stride4Offset + i ] = boundingData[ i ];
+
+	}
+
+	if ( isLeaf ) {
+
+		if ( node.buffer ) {
+
+			const buffer = node.buffer;
+			uint8Array.set( new Uint8Array( buffer ), byteOffset );
+
+			for ( let offset = byteOffset, l = byteOffset + buffer.byteLength; offset < l; offset += BYTES_PER_NODE ) {
+
+				const offset2 = offset / 2;
+				if ( ! IS_LEAF( offset2, uint16Array ) ) {
+
+					uint32Array[ ( offset / 4 ) + 6 ] += stride4Offset;
+
+
+				}
+
+			}
+
+			return byteOffset + buffer.byteLength;
+
+		} else {
+
+			const offset = node.offset;
+			const count = node.count;
+			uint32Array[ stride4Offset + 6 ] = offset;
+			uint16Array[ stride2Offset + 14 ] = count;
+			uint16Array[ stride2Offset + 15 ] = IS_LEAFNODE_FLAG;
+			return byteOffset + BYTES_PER_NODE;
+
+		}
+
+	} else {
+
+		const left = node.left;
+		const right = node.right;
+		const splitAxis = node.splitAxis;
+
+		let nextUnusedPointer;
+		nextUnusedPointer = _populateBuffer( byteOffset + BYTES_PER_NODE, left );
+
+		if ( ( nextUnusedPointer / 4 ) > MAX_POINTER ) {
+
+			throw new Error( 'MeshBVH: Cannot store child pointer greater than 32 bits.' );
+
+		}
+
+		uint32Array[ stride4Offset + 6 ] = nextUnusedPointer / 4;
+		nextUnusedPointer = _populateBuffer( nextUnusedPointer, right );
+
+		uint32Array[ stride4Offset + 7 ] = splitAxis;
+		return nextUnusedPointer;
+
+	}
+
+}
+
 function generateIndirectBuffer( geometry, useSharedArrayBuffer ) {
 
 	const triCount = ( geometry.index ? geometry.index.count : geometry.attributes.position.count ) / 3;
@@ -946,56 +1056,31 @@ function generateIndirectBuffer( geometry, useSharedArrayBuffer ) {
 
 }
 
-function buildTree( bvh, options ) {
+function buildTree( bvh, triangleBounds, offset, count, options ) {
 
-	// Compute the full bounds of the geometry at the same time as triangle bounds because
-	// we'll need it for the root bounds in the case with no groups and it should be fast here.
-	// We can't use the geometry bounding box if it's available because it may be out of date.
+	// epxand variables
+	const {
+		maxDepth,
+		verbose,
+		maxLeafTris,
+		strategy,
+		onProgress,
+		indirect,
+	} = options;
+	const indirectBuffer = bvh._indirectBuffer;
 	const geometry = bvh.geometry;
 	const indexArray = geometry.index ? geometry.index.array : null;
-	const maxDepth = options.maxDepth;
-	const verbose = options.verbose;
-	const maxLeafTris = options.maxLeafTris;
-	const strategy = options.strategy;
-	const onProgress = options.onProgress;
+	const partionFunc = indirect ? partition_indirect : partition;
+
+	// generate intermediate variables
 	const totalTriangles = getTriCount( geometry );
-	const indirectBuffer = bvh._indirectBuffer;
+	const cacheCentroidBoundingData = new Float32Array( 6 );
 	let reachedMaxDepth = false;
 
-	const fullBounds = new Float32Array( 6 );
-	const cacheCentroidBoundingData = new Float32Array( 6 );
-	const triangleBounds = computeTriangleBounds( geometry, fullBounds );
-	const partionFunc = options.indirect ? partition_indirect : partition;
-
-	const roots = [];
-	const ranges = options.indirect ? getFullGeometryRange( geometry ) : getRootIndexRanges( geometry );
-
-	if ( ranges.length === 1 ) {
-
-		const range = ranges[ 0 ];
-		const root = new MeshBVHNode();
-		root.boundingData = fullBounds;
-		getCentroidBounds( triangleBounds, range.offset, range.count, cacheCentroidBoundingData );
-
-		splitNode( root, range.offset, range.count, cacheCentroidBoundingData );
-		roots.push( root );
-
-	} else {
-
-		for ( let range of ranges ) {
-
-			const root = new MeshBVHNode();
-			root.boundingData = new Float32Array( 6 );
-			getBounds( triangleBounds, range.offset, range.count, root.boundingData, cacheCentroidBoundingData );
-
-			splitNode( root, range.offset, range.count, cacheCentroidBoundingData );
-			roots.push( root );
-
-		}
-
-	}
-
-	return roots;
+	const root = new MeshBVHNode();
+	getBounds( triangleBounds, offset, count, root.boundingData, cacheCentroidBoundingData );
+	splitNode( root, offset, count, cacheCentroidBoundingData );
+	return root;
 
 	function triggerProgress( trianglesProcessed ) {
 
@@ -1062,7 +1147,6 @@ function buildTree( bvh, options ) {
 			const lstart = offset;
 			const lcount = splitOffset - offset;
 			node.left = left;
-			left.boundingData = new Float32Array( 6 );
 
 			getBounds( triangleBounds, lstart, lcount, left.boundingData, cacheCentroidBoundingData );
 			splitNode( left, lstart, lcount, cacheCentroidBoundingData, depth + 1 );
@@ -1072,7 +1156,6 @@ function buildTree( bvh, options ) {
 			const rstart = splitOffset;
 			const rcount = count - lcount;
 			node.right = right;
-			right.boundingData = new Float32Array( 6 );
 
 			getBounds( triangleBounds, rstart, rcount, right.boundingData, cacheCentroidBoundingData );
 			splitNode( right, rstart, rcount, cacheCentroidBoundingData, depth + 1 );
@@ -1109,92 +1192,19 @@ function buildPackedTree( bvh, options ) {
 
 	}
 
-	// boundingData  				: 6 float32
-	// right / offset 				: 1 uint32
-	// splitAxis / isLeaf + count 	: 1 uint32 / 2 uint16
-	const roots = buildTree( bvh, options );
-
-	let float32Array;
-	let uint32Array;
-	let uint16Array;
-	const packedRoots = [];
 	const BufferConstructor = options.useSharedArrayBuffer ? SharedArrayBuffer : ArrayBuffer;
-	for ( let i = 0; i < roots.length; i ++ ) {
 
-		const root = roots[ i ];
-		let nodeCount = countNodes( root );
+	const triangleBounds = computeTriangleBounds( geometry );
+	const geometryRanges = options.indirect ? getFullGeometryRange( geometry ) : getRootIndexRanges( geometry );
+	bvh._roots = geometryRanges.map( range => {
 
+		const root = buildTree( bvh, triangleBounds, range.offset, range.count, options );
+		const nodeCount = countNodes( root );
 		const buffer = new BufferConstructor( BYTES_PER_NODE * nodeCount );
-		float32Array = new Float32Array( buffer );
-		uint32Array = new Uint32Array( buffer );
-		uint16Array = new Uint16Array( buffer );
-		populateBuffer( 0, root );
-		packedRoots.push( buffer );
+		populateBuffer( 0, root, buffer );
+		return buffer;
 
-	}
-
-	bvh._roots = packedRoots;
-	return;
-
-	function countNodes( node ) {
-
-		if ( node.count ) {
-
-			return 1;
-
-		} else {
-
-			return 1 + countNodes( node.left ) + countNodes( node.right );
-
-		}
-
-	}
-
-	function populateBuffer( byteOffset, node ) {
-
-		const stride4Offset = byteOffset / 4;
-		const stride2Offset = byteOffset / 2;
-		const isLeaf = ! ! node.count;
-		const boundingData = node.boundingData;
-		for ( let i = 0; i < 6; i ++ ) {
-
-			float32Array[ stride4Offset + i ] = boundingData[ i ];
-
-		}
-
-		if ( isLeaf ) {
-
-			const offset = node.offset;
-			const count = node.count;
-			uint32Array[ stride4Offset + 6 ] = offset;
-			uint16Array[ stride2Offset + 14 ] = count;
-			uint16Array[ stride2Offset + 15 ] = IS_LEAFNODE_FLAG;
-			return byteOffset + BYTES_PER_NODE;
-
-		} else {
-
-			const left = node.left;
-			const right = node.right;
-			const splitAxis = node.splitAxis;
-
-			let nextUnusedPointer;
-			nextUnusedPointer = populateBuffer( byteOffset + BYTES_PER_NODE, left );
-
-			if ( ( nextUnusedPointer / 4 ) > Math.pow( 2, 32 ) ) {
-
-				throw new Error( 'MeshBVH: Cannot store child pointer greater than 32 bits.' );
-
-			}
-
-			uint32Array[ stride4Offset + 6 ] = nextUnusedPointer / 4;
-			nextUnusedPointer = populateBuffer( nextUnusedPointer, right );
-
-			uint32Array[ stride4Offset + 7 ] = splitAxis;
-			return nextUnusedPointer;
-
-		}
-
-	}
+	} );
 
 }
 
@@ -2497,48 +2507,6 @@ class ExtendedTrianglePoolBase extends PrimitivePool {
 }
 
 const ExtendedTrianglePool = /* @__PURE__ */ new ExtendedTrianglePoolBase();
-
-function IS_LEAF( n16, uint16Array ) {
-
-	return uint16Array[ n16 + 15 ] === 0xFFFF;
-
-}
-
-function OFFSET( n32, uint32Array ) {
-
-	return uint32Array[ n32 + 6 ];
-
-}
-
-function COUNT( n16, uint16Array ) {
-
-	return uint16Array[ n16 + 14 ];
-
-}
-
-function LEFT_NODE( n32 ) {
-
-	return n32 + 8;
-
-}
-
-function RIGHT_NODE( n32, uint32Array ) {
-
-	return uint32Array[ n32 + 6 ];
-
-}
-
-function SPLIT_AXIS( n32, uint32Array ) {
-
-	return uint32Array[ n32 + 7 ];
-
-}
-
-function BOUNDING_DATA_INDEX( n32 ) {
-
-	return n32;
-
-}
 
 class _BufferStack {
 
@@ -4732,6 +4700,42 @@ function isSharedArrayBufferSupported() {
 
 }
 
+function convertToBufferType( array, BufferConstructor ) {
+
+	if ( array === null ) {
+
+		return array;
+
+	} else if ( array.buffer ) {
+
+		const buffer = array.buffer;
+		if ( buffer.constructor === BufferConstructor ) {
+
+			return array;
+
+		}
+
+		const ArrayConstructor = array.constructor;
+		const result = new ArrayConstructor( new BufferConstructor( buffer.byteLength ) );
+		result.set( array );
+		return result;
+
+	} else {
+
+		if ( array.constructor === BufferConstructor ) {
+
+			return array;
+
+		}
+
+		const result = new BufferConstructor( array.byteLength );
+		new Uint8Array( result ).set( new Uint8Array( array ) );
+		return result;
+
+	}
+
+}
+
 const _bufferStack1 = new BufferStack.constructor();
 const _bufferStack2 = new BufferStack.constructor();
 const _boxPool = new PrimitivePool( () => new Box3() );
@@ -5042,6 +5046,16 @@ function _traverse(
 
 const obb = /* @__PURE__ */ new OrientedBox();
 const tempBox = /* @__PURE__ */ new Box3();
+const DEFAULT_OPTIONS = {
+	strategy: CENTER,
+	maxDepth: 40,
+	maxLeafTris: 10,
+	useSharedArrayBuffer: false,
+	setBoundingBox: true,
+	onProgress: null,
+	indirect: false,
+	verbose: true,
+};
 
 class MeshBVH {
 
@@ -5134,14 +5148,7 @@ class MeshBVH {
 		// default options
 		options = Object.assign( {
 
-			strategy: CENTER,
-			maxDepth: 40,
-			maxLeafTris: 10,
-			verbose: true,
-			useSharedArrayBuffer: false,
-			setBoundingBox: true,
-			onProgress: null,
-			indirect: false,
+			...DEFAULT_OPTIONS,
 
 			// undocumented options
 
@@ -5613,7 +5620,7 @@ class MeshBVHRootHelper extends Object3D {
 			let boundsCount = 0;
 			boundsTree.traverse( ( depth, isLeaf ) => {
 
-				if ( depth === targetDepth || isLeaf ) {
+				if ( depth >= targetDepth || isLeaf ) {
 
 					boundsCount ++;
 					return true;
@@ -5631,7 +5638,7 @@ class MeshBVHRootHelper extends Object3D {
 			const positionArray = new Float32Array( 8 * 3 * boundsCount );
 			boundsTree.traverse( ( depth, isLeaf, boundingData ) => {
 
-				const terminate = depth === targetDepth || isLeaf;
+				const terminate = depth >= targetDepth || isLeaf;
 				if ( terminate || displayParents ) {
 
 					arrayToBox( 0, boundingData, boundingBox );
@@ -5792,8 +5799,8 @@ class MeshBVHHelper extends Group {
 		// handle mesh, depth signature
 		if ( typeof bvh === 'number' ) {
 
-			bvh = null;
 			depth = bvh;
+			bvh = null;
 
 		}
 
@@ -6133,11 +6140,20 @@ function validateBounds( bvh ) {
 		if ( isLeaf ) {
 
 			// check triangles
-			for ( let i = offset * 3, l = ( offset + count ) * 3; i < l; i += 3 ) {
+			for ( let i = offset, l = offset + count; i < l; i ++ ) {
 
-				const i0 = index.getX( i );
-				const i1 = index.getX( i + 1 );
-				const i2 = index.getX( i + 2 );
+				const triIndex = bvh.resolveTriangleIndex( i );
+				let i0 = 3 * triIndex;
+				let i1 = 3 * triIndex + 1;
+				let i2 = 3 * triIndex + 2;
+
+				if ( index ) {
+
+					i0 = index.getX( i0 );
+					i1 = index.getX( i1 );
+					i2 = index.getX( i2 );
+
+				}
 
 				let isContained;
 

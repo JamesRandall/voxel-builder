@@ -3,7 +3,6 @@
     @nimadez
     
     Real-time GPU Path Tracer
-
     Powered by "three-mesh-bvh" library by @gkjohnson
 */
 import {
@@ -159,7 +158,6 @@ class Pathtracer {
             uEmissive: { value: new THREE.Color() },
             uRoughness: { value: 0.0 },
             uGrid: { value: 0.0 },
-            uFastMode: { value: this.isFastMode },
 
             cameraWorldMatrix: { value: new THREE.Matrix4() },
             invProjectionMatrix: { value: new THREE.Matrix4() },
@@ -200,6 +198,7 @@ class Pathtracer {
             this.geom.dispose()
         };
 
+        builder.fillArrayBuffers();
         this.geom = new THREE.BufferGeometry();
         this.geom.setAttribute('position', new THREE.BufferAttribute(builder.positions, 3));
         //this.geom.setAttribute('normal', new THREE.BufferAttribute(builder.normals, 3));
@@ -343,10 +342,6 @@ class Pathtracer {
         this.resetSamples();
     }
 
-    updateUniformFastMode(isEnabled) {
-        this.uniRender['uFastMode'].value = isEnabled;
-    }
-
     async updateHDR(url) {
         if (!this.uniRender) return; // workaround for error: loading hdr before pt.init
         await loadRGBE(url).then(tex => {
@@ -384,10 +379,8 @@ class Pathtracer {
         (this.isFastMode) ?
             this.domFastMode.classList.add('btn_select_pt') :
             this.domFastMode.classList.remove('btn_select_pt');
-        if (this.isLoaded) {
-            this.updateUniformFastMode(this.isFastMode);
+        if (this.isLoaded)
             this.resize();
-        }
     }
 
     animate() {
