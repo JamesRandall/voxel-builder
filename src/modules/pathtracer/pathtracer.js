@@ -5,16 +5,6 @@
     Real-time GPU Path Tracer
 
     Powered by "three-mesh-bvh" library by @gkjohnson
-    Credits to Inigo Quilez @iq for articles and experiments
-
-    Notice: Mobile GPU is not supported
-    Error message:
-        [WARNING:angle_platform_impl.cc(49)] ShaderGL.cpp:136 (checkShader):
-        ERROR: 0:97: '_ubvh' : undeclared identifier
-        ERROR: 0:97: '_uindex'
-        ...
-
-    Notice: Multi-material is a known issue
 */
 import {
     THREE,
@@ -494,8 +484,6 @@ class Pathtracer {
 
     activate() {
         if (this.isLoaded) return; // avoid overdraw
-
-        if (isMobile) ui.notification("mobile is not supported");
 
         isRendering = false;
 

@@ -12,7 +12,8 @@ Version 4.2.7 Beta
 [Known Issues](https://github.com/nimadez/voxel-builder#known-issues)<br>
 [FAQ](https://github.com/nimadez/voxel-builder#faq)
 
-> The online version does not have maximum functionality, be sure to [download](https://github.com/nimadez/voxel-builder/releases/tag/installer) the Electron package.
+> - three-mesh-bvh has been updated to 0.7.0 and the pathtracer issue on Chrome for Android devices has been resolved.
+> - The online version does not have maximum functionality, be sure to [download](https://github.com/nimadez/voxel-builder/releases/tag/installer) the Electron package.
 
 ## Features
 
@@ -77,7 +78,6 @@ Multiple meshes need to have the same properties,
 or they won't merge, the only solution is to merge meshes
 before exporting to GLB.
 
-:: Real-time renderer is not supported on mobile devices
 :: Real-time renderer does not support multi-material
 Postponed to future
 ```
